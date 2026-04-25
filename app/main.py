@@ -1,4 +1,3 @@
-from asyncio import run
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,15 +7,10 @@ from app.services.openf1 import OpenF1
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(application: FastAPI):
     async with AsyncClient() as session:
-        app.state.openf1 = OpenF1(session)
+        application.state.openf1 = OpenF1(session)
         yield
 
 
-async def main() -> None:
-    app = FastAPI(liefespan=lifespan)
-
-
-if __name__ == "__main__":
-    run(main())
+app = FastAPI(lifespan=lifespan)
