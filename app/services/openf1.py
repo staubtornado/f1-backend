@@ -29,6 +29,11 @@ class OpenF1:
         response.raise_for_status()
 
         data: list[dict] = response.json()
-        return [Race.from_openf1(entry) for entry in data]
         return [Weekend.from_openf1(entry) for entry in data]
 
+    async def get_weekend_sessions(self, weekend_id: int) -> list[Session]:
+        response = await self._client.get(f"{self.API_URL}/sessions?meeting_key={weekend_id}")
+        response.raise_for_status()
+
+        data: list[dict] = response.json()
+        return [Session.from_openf1(entry) for entry in data]
