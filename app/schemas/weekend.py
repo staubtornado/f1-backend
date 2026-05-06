@@ -4,7 +4,7 @@ from typing import Self
 from pydantic import BaseModel
 
 
-class Race(BaseModel):
+class Weekend(BaseModel):
     name: str
     id: int
     country_code: str

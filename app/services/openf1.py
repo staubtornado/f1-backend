@@ -2,7 +2,8 @@ from asyncio import sleep
 
 from httpx import AsyncClient
 
-from app.schemas.race import Race
+from app.schemas.session import Session
+from app.schemas.weekend import Weekend
 
 
 class OpenF1:
@@ -23,9 +24,11 @@ class OpenF1:
             await sleep(0)
         return sorted(years)
 
-    async def get_season_races(self, season: int) -> list[Race]:
+    async def get_season_weekends(self, season: int) -> list[Weekend]:
         response = await self._client.get(f"{self.API_URL}/meetings?year={season}")
         response.raise_for_status()
 
         data: list[dict] = response.json()
         return [Race.from_openf1(entry) for entry in data]
+        return [Weekend.from_openf1(entry) for entry in data]
+
