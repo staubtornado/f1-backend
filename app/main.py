@@ -1,16 +1,27 @@
 from contextlib import asynccontextmanager
+from os import environ
 
 from fastapi import FastAPI
 from httpx import AsyncClient
+from redis.asyncio import Redis
 
 from app.services.openf1 import OpenF1
+
+REDIS_HOST = environ.get("REDIS_HOST", "127.0.0.1")
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    async with AsyncClient() as session:
-        application.state.openf1 = OpenF1(session)
-        yield
+    session = AsyncClient()
+    redis = Redis(host=REDIS_HOST)
+
+    application.state.openf1 = OpenF1(session)
+    application.state.redis = redis
+
+    yield
+
+    await session.aclose()
+    await redis.aclose()
 
 
 app = FastAPI(lifespan=lifespan)

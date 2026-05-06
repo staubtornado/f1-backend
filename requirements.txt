@@ -2,3 +2,4 @@ fastapi
 httpx
 starlette
 uvicorn
+redis==7.4.0
