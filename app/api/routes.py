@@ -11,6 +11,16 @@ def get_openf1_client(request: Request) -> OpenF1:
 router = APIRouter()
 
 
-@router.get("/sessions")
-async def get_sessions(client: OpenF1 = Depends(get_openf1_client), year: int = 2026):
-    return await client.get_sessions(year)
+@router.get("/seasons/")
+async def get_sessions(client: OpenF1 = Depends(get_openf1_client)):
+    return await client.get_seasons()
+
+
+@router.get("/seasons/{season}/races/")
+async def get_season_races(season: int, client: OpenF1 = Depends(get_openf1_client)):
+    return await client.get_season_races(season)
+
+
+@router.get("/races/{race_id}/sessions/")
+async def get_race_sessions(races_id: int, client: OpenF1 = Depends(get_openf1_client)):
+    pass

@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from redis.asyncio import Redis
 
+from app.api.routes import router
 from app.services.openf1 import OpenF1
 
 REDIS_HOST = environ.get("REDIS_HOST", "127.0.0.1")
@@ -25,3 +26,4 @@ async def lifespan(application: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(router=router)
