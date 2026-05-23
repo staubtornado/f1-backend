@@ -1,5 +1,3 @@
-from asyncio import sleep
-
 from httpx import AsyncClient
 
 from app.schemas.session import Session
@@ -21,7 +19,6 @@ class OpenF1:
 
         for entry in data:
             years.add(entry["year"])
-            await sleep(0)
         return sorted(years)
 
     async def get_season_weekends(self, season: int) -> list[Weekend]:
