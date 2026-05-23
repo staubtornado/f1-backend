@@ -16,7 +16,7 @@ async def get_sessions(client: OpenF1 = Depends(get_openf1_client)):
     return await client.get_seasons()
 
 
-@router.get("/seasons/{season}/races/")
+@router.get("/seasons/{season}/weekends/")
 async def get_season_races(season: int, client: OpenF1 = Depends(get_openf1_client)):
     return await client.get_season_weekends(season)
 
