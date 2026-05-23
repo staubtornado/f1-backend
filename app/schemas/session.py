@@ -27,6 +27,6 @@ class Session(BaseModel):
         return cls(
             id=data["session_key"],
             type=session_type_mapping[data["session_name"]],
-            race_id=data["meeting_key"],
+            weekend_id=data["meeting_key"],
             start_time=data["date_start"],
         )
