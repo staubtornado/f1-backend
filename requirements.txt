@@ -3,3 +3,5 @@ httpx
 starlette
 uvicorn
 redis==7.4.0
+pytest
+pytest-asyncio
