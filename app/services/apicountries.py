@@ -3,8 +3,6 @@ from typing import Any
 
 from httpx import AsyncClient
 
-from app.schemas.country import Country
-
 
 class ApiCountries:
     """Client for the REST Countries API and flagcdn.com flag resources."""
@@ -17,15 +15,15 @@ class ApiCountries:
         """
         self._client = client
 
-    async def get_country(self, alpha3_code: str) -> Country:
+    async def get_country(self, alpha3_code: str) -> tuple[dict, str]:
         """
-        Fetch country metadata and flag for a given ISO 3166-1 alpha-3 code.
+        Fetch country metadata and SVG flag for a given ISO 3166-1 alpha-3 code.
 
         Performs two HTTP requests: one to the REST Countries API for metadata,
         and one to flagcdn.com for the SVG flag image.
 
         :param alpha3_code: ISO 3166-1 alpha-3 country code (e.g. ``"BEL"``).
-        :returns: Populated Country schema including base64-encoded flag.
+        :returns: Tuple of the raw API response dict and a base64-encoded SVG flag string.
         :raises httpx.HTTPStatusError: If either upstream request returns a non-2xx status.
         """
         response = await self._client.get(f"{self.API_URL}/{alpha3_code}")
@@ -33,7 +31,7 @@ class ApiCountries:
 
         data: dict[str, Any] = response.json()
         flag_base64 = await self._get_country_flag(data["alpha2Code"])
-        return Country.from_api_countries(data, flag_base64=flag_base64)
+        return data, flag_base64
 
     async def _get_country_flag(self, alpha2_code: str) -> str:
         """
