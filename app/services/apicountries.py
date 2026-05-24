@@ -1,0 +1,49 @@
+from base64 import b64encode
+from typing import Any
+
+from httpx import AsyncClient
+
+from app.schemas.country import Country
+
+
+class ApiCountries:
+    """Client for the REST Countries API and flagcdn.com flag resources."""
+
+    API_URL = "https://www.apicountires.com/alpha"
+
+    def __init__(self, client: AsyncClient) -> None:
+        """
+        :param client: Shared async HTTP client instance.
+        """
+        self._client = client
+
+    async def get_country(self, alpha3_code: str) -> Country:
+        """
+        Fetch country metadata and flag for a given ISO 3166-1 alpha-3 code.
+
+        Performs two HTTP requests: one to the REST Countries API for metadata,
+        and one to flagcdn.com for the SVG flag image.
+
+        :param alpha3_code: ISO 3166-1 alpha-3 country code (e.g. ``"BEL"``).
+        :returns: Populated Country schema including base64-encoded flag.
+        :raises httpx.HTTPStatusError: If either upstream request returns a non-2xx status.
+        """
+        response = await self._client.get(f"{self.API_URL}/{alpha3_code}")
+        response.raise_for_status()
+
+        data: dict[str, Any] = response.json()
+        flag_base64 = await self._get_country_flag(data["alpha2Code"])
+        return Country.from_api_countries(data, flag_base64=flag_base64)
+
+    async def _get_country_flag(self, alpha2_code: str) -> str:
+        """
+        Download the SVG flag for a given ISO 3166-1 alpha-2 code and return it
+        as a base64-encoded string.
+
+        :param alpha2_code: ISO 3166-1 alpha-2 country code (e.g. ``"BE"``).
+        :returns: Base64-encoded SVG content as a UTF-8 string.
+        :raises httpx.HTTPStatusError: If the flagcdn.com request returns a non-2xx status.
+        """
+        response = await self._client.get(f"https://flagcdn.com/{alpha2_code}.svg")
+        response.raise_for_status()
+        return b64encode(response.content).decode("utf-8")
