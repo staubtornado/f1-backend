@@ -66,11 +66,11 @@ async def test_get_weekend_sessions_converts_data(openf1_service):
     resp.raise_for_status = lambda: None
     openf1_service._client.get.return_value = resp
 
-    sessions = openf1_service.get_weekend_sessions(1229)
+    sessions = await openf1_service.get_weekend_sessions(1229)
 
     assert isinstance(sessions, list)
     assert len(sessions) == 5
     assert isinstance(sessions[0], Session)
-    assert sessions[0].id == 0 #TODO
+    assert sessions[0].id == 9465
     assert sessions[0].type == SessionType.PRACTICE_ONE
     assert sessions[0].weekend_id == 1229
