@@ -1,3 +1,6 @@
+from datetime import datetime
+from json import loads, dumps
+
 from redis.asyncio import Redis
 
 from app.schemas.country import Country
@@ -14,22 +17,22 @@ class F1Service:
         self._redis = redis
 
     async def get_seasons(self) -> list[int]:
-        return await self._openf1.get_seasons()
+        cache_key = "seasons"
+        if cached := await self._redis.get(cache_key):
+            return loads(cached)
+
+        seasons = await self._openf1.get_seasons()
+        await self._redis.set(cache_key, dumps(seasons), ex=60 * 60 * 24)
+        return seasons
 
     async def get_season_weekends(self, season: int) -> list[Weekend]:
-        """
-        Fetch all race weekends for a given season, enriched with country metadata and flags.
+        cache_key = f"weekends:{season}"
 
-        For each weekend, two additional HTTP requests are made to resolve country data.
-        Countries are not deduplicated — use with caution for large seasons.
+        if cached := await self._redis.get(cache_key):
+            return [Weekend.model_validate_json(entry) for entry in loads(cached)]
 
-        :param season: Formula 1-season year (e.g. ``2024``).
-        :returns: List of `Weekend` instances with fully populated `Country` data.
-        :raises httpx.HTTPStatusError: If any upstream request returns a non-2xx status.
-        """
         raw_weekends: list[dict] = await self._openf1.get_season_weekends(season)
-
-        return [
+        weekends = [
             Weekend.from_openf1(
                 raw,
                 country=Country.from_api_countries(
@@ -39,6 +42,16 @@ class F1Service:
             for raw in raw_weekends
         ]
 
+        current_year = datetime.now().year
+        ex = 60 * 60 * 24 * 7 if season < current_year else 60 * 60
+
+        await self._redis.set(
+            cache_key,
+            dumps([w.model_dump_json() for w in weekends]),
+            ex=ex,
+        )
+        return weekends
+
     async def get_weekend_sessions(self, weekend_id: int) -> list[Session]:
         data: list[dict] = await self._openf1.get_weekend_sessions(weekend_id)
         return [Session.from_openf1(entry) for entry in data]
@@ -47,10 +60,10 @@ class F1Service:
         cache_key = f"country:{alpha3_code}"
 
         if cached := await self._redis.get(cache_key):
-            return Country.model_validate(cached)
+            return Country.model_validate_json(cached)
 
         country_data, flag_base64 = await self._countries.get_country(alpha3_code)
         country = Country.from_api_countries(country_data, flag_base64)
 
-        await self._redis.set(cache_key, country.model_dump(), ttl=60 * 60 * 24 * 7)
+        await self._redis.set(cache_key, country.model_dump_json(), ttl=60 * 60 * 24 * 7)
         return country

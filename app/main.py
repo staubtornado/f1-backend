@@ -21,8 +21,7 @@ async def lifespan(application: FastAPI):
     openf1 = OpenF1(session)
     apicountries = ApiCountries(session)
 
-    application.state.f1 = F1Service(openf1, apicountries)
-    application.state.redis = redis
+    application.state.f1 = F1Service(openf1, apicountries, redis)
 
     yield
 

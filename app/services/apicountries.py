@@ -5,19 +5,18 @@ from httpx import AsyncClient
 
 
 class ApiCountries:
-    """Client for the REST Countries API and flagcdn.com flag resources."""
+    """Client for the REST Countries API and flagcdn.com flag resources.
+
+    :param client: Shared async HTTP client instance.
+    """
 
     API_URL = "https://www.apicountires.com/alpha"
 
     def __init__(self, client: AsyncClient) -> None:
-        """
-        :param client: Shared async HTTP client instance.
-        """
         self._client = client
 
     async def get_country(self, alpha3_code: str) -> tuple[dict, str]:
-        """
-        Fetch country metadata and SVG flag for a given ISO 3166-1 alpha-3 code.
+        """Fetch country metadata and SVG flag for a given ISO 3166-1 alpha-3 code.
 
         Performs two HTTP requests: one to the REST Countries API for metadata,
         and one to flagcdn.com for the SVG flag image.
@@ -34,9 +33,9 @@ class ApiCountries:
         return data, flag_base64
 
     async def _get_country_flag(self, alpha2_code: str) -> str:
-        """
-        Download the SVG flag for a given ISO 3166-1 alpha-2 code and return it
-        as a base64-encoded string.
+        """Download the SVG flag for a given ISO 3166-1 alpha-2 code.
+
+        Returns the flag as a base64-encoded string.
 
         :param alpha2_code: ISO 3166-1 alpha-2 country code (e.g. ``"BE"``).
         :returns: Base64-encoded SVG content as a UTF-8 string.
