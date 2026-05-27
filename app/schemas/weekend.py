@@ -9,7 +9,7 @@ from app.schemas.country import Country
 class Weekend(BaseModel):
     name: str
     id: int
-    country: Country
+    country: Country | None
     circuit_id: int
     date_start: datetime
     date_end: datetime
@@ -17,7 +17,7 @@ class Weekend(BaseModel):
     cancelled: bool
 
     @classmethod
-    def from_openf1(cls, data: dict, country: Country) -> Self:
+    def from_openf1(cls, data: dict, country: Country | None) -> Self:
         return cls(
             id=data["meeting_key"],
             name=data["meeting_name"],

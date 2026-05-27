@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends
 from starlette.requests import Request
 
 from app.services.f1 import F1Service
-from app.services.openf1 import OpenF1
 
 
 def get_f1_service(request: Request) -> F1Service:
@@ -13,15 +12,15 @@ router = APIRouter()
 
 
 @router.get("/seasons/")
-async def get_sessions(client: OpenF1 = Depends(get_f1_service)):
+async def get_sessions(client: F1Service = Depends(get_f1_service)):
     return await client.get_seasons()
 
 
 @router.get("/seasons/{season}/weekends/")
-async def get_season_races(season: int, client: OpenF1 = Depends(get_f1_service)):
+async def get_season_races(season: int, client: F1Service = Depends(get_f1_service)):
     return await client.get_season_weekends(season)
 
 
 @router.get("/weekend/{weekend_id}/sessions/")
-async def get_race_sessions(weekend_id: int, client: OpenF1 = Depends(get_f1_service)):
+async def get_race_sessions(weekend_id: int, client: F1Service = Depends(get_f1_service)):
     return await client.get_weekend_sessions(weekend_id)

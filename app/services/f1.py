@@ -1,6 +1,7 @@
 from datetime import datetime
 from json import loads, dumps
 
+from httpx import HTTPStatusError
 from redis.asyncio import Redis
 
 from app.schemas.country import Country
@@ -32,15 +33,14 @@ class F1Service:
             return [Weekend.model_validate_json(entry) for entry in loads(cached)]
 
         raw_weekends: list[dict] = await self._openf1.get_season_weekends(season)
-        weekends = [
-            Weekend.from_openf1(
-                raw,
-                country=Country.from_api_countries(
-                    *await self._get_country(raw["country_code"])
-                ),
-            )
-            for raw in raw_weekends
-        ]
+        weekends = []
+        for raw in raw_weekends:
+            try:
+                country = await self._get_country(raw["country_code"])
+            except HTTPStatusError:
+                country = None
+            weekend = Weekend.from_openf1(raw, country)
+            weekends.append(weekend)
 
         current_year = datetime.now().year
         ex = 60 * 60 * 24 * 7 if season < current_year else 60 * 60
@@ -65,5 +65,5 @@ class F1Service:
         country_data, flag_base64 = await self._countries.get_country(alpha3_code)
         country = Country.from_api_countries(country_data, flag_base64)
 
-        await self._redis.set(cache_key, country.model_dump_json(), ttl=60 * 60 * 24 * 7)
+        await self._redis.set(cache_key, country.model_dump_json(), ex=60 * 60 * 24 * 7)
         return country

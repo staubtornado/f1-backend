@@ -53,7 +53,7 @@ class OpenF1:
 
         Sessions include practice, qualifying, sprint, and race.
 
-        :param weekend_id: The id of the target weekend obtainable via ``get_season_weekends``.
+        :param weekend_id: The id of the target weekend is obtainable via ``get_season_weekends``.
         :return: List of session objects as returned by the OpenF1 API.
         :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
         """
