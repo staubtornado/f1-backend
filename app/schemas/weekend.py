@@ -3,11 +3,13 @@ from typing import Self
 
 from pydantic import BaseModel
 
+from app.schemas.country import Country
+
 
 class Weekend(BaseModel):
     name: str
     id: int
-    country_code: str
+    country: Country | None
     circuit_id: int
     date_start: datetime
     date_end: datetime
@@ -15,11 +17,11 @@ class Weekend(BaseModel):
     cancelled: bool
 
     @classmethod
-    def from_openf1(cls, data: dict) -> Self:
+    def from_openf1(cls, data: dict, country: Country | None) -> Self:
         return cls(
             id=data["meeting_key"],
             name=data["meeting_name"],
-            country_code=data["country_code"],
+            country=country,
             circuit_id=data["circuit_key"],
             date_start=data["date_start"],
             date_end=data["date_end"],

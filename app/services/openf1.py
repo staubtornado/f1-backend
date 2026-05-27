@@ -1,36 +1,76 @@
+from aiolimiter import AsyncLimiter
 from httpx import AsyncClient
-
-from app.schemas.session import Session
-from app.schemas.weekend import Weekend
 
 
 class OpenF1:
+    """
+    Client for the OpenF1 REST API.
+
+    Wraps HTTP communication and rate limiting against the public
+    OpenF1 API (https://api.openf1.org/v1). Rate limits are enforced
+    at 3 requests/second and 30 requests/minute.
+
+    :param client: Shared async HTTP client instance. Lifecycle management
+        (creation and teardown) is the caller's responsibility.
+    """
+
     API_URL = "https://api.openf1.org/v1"
 
     def __init__(self, client: AsyncClient) -> None:
         self._client = client
+        self._per_second = AsyncLimiter(3, 1)
+        self._per_minute = AsyncLimiter(30, 60)
 
     async def get_seasons(self) -> list[int]:
-        response = await self._client.get(f"{self.API_URL}/sessions")
-        response.raise_for_status()
+        """
+        Fetch all available F1 seasons as a sorted list of years.
 
-        data: list[dict] = response.json()
+        Retrieves all sessions from the API and deduplicates by year.
+
+        :return: Ascending list of season years, e.g. ``[2023, 2024, 2025]``.
+        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
+        """
+        data: list[dict] = await self._call(f"{self.API_URL}/sessions")
         years: set[int] = set()
 
         for entry in data:
             years.add(entry["year"])
         return sorted(years)
 
-    async def get_season_weekends(self, season: int) -> list[Weekend]:
-        response = await self._client.get(f"{self.API_URL}/meetings?year={season}")
-        response.raise_for_status()
+    async def get_season_weekends(self, season: int) -> list[dict]:
+        """
+        Fetch all race weekends for a given season.
 
-        data: list[dict] = response.json()
-        return [Weekend.from_openf1(entry) for entry in data]
+        :param season: The season year, e.g. ``2024``.
+        :return: List of meeting objects as returned by the OpenF1 API.
+        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
+        """
+        return await self._call(f"{self.API_URL}/meetings?year={season}")
 
-    async def get_weekend_sessions(self, weekend_id: int) -> list[Session]:
-        response = await self._client.get(f"{self.API_URL}/sessions?meeting_key={weekend_id}")
-        response.raise_for_status()
+    async def get_weekend_sessions(self, weekend_id: int) -> list[dict]:
+        """
+        Fetch all sessions for a given race weekend.
 
-        data: list[dict] = response.json()
-        return [Session.from_openf1(entry) for entry in data]
+        Sessions include practice, qualifying, sprint, and race.
+
+        :param weekend_id: The id of the target weekend is obtainable via ``get_season_weekends``.
+        :return: List of session objects as returned by the OpenF1 API.
+        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
+        """
+        return await self._call(f"{self.API_URL}/sessions?meeting_key={weekend_id}")
+
+    async def _call(self, url: str) -> dict | list:
+        """
+        Execute a rate-limited GET request.
+
+        Blocks the calling coroutine until both the per-second and
+        per-minute limiters have a token available.
+
+        :param url: Full request URL.
+        :return: Deserialized JSON response body.
+        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
+        """
+        async with self._per_second, self._per_minute:
+            response = await self._client.get(url)
+            response.raise_for_status()
+            return response.json()

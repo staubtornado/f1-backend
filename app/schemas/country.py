@@ -13,12 +13,12 @@ class Country(BaseModel):
     flag_base64: str
 
     @classmethod
-    def from_api_countries(cls, data: dict, flag_base64: str) -> Self:
+    def from_rest_countries(cls, data: dict, flag_base64: str) -> Self:
         return cls(
-            id=int(data["numericCode"]),
-            name=data["name"],
-            name_de=data["translations"]["de"],
-            alpha3_code=data["alpha3Code"],
+            id=int(data["ccn3"]),
+            name=data["name"]["common"],
+            name_de=data["translations"]["deu"].get("common", ""),
+            alpha3_code=data["cca3"],
             subregion=data["subregion"],
             region=data["region"],
             flag_base64=flag_base64,
