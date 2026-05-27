@@ -7,7 +7,7 @@ from redis.asyncio import Redis
 from app.schemas.country import Country
 from app.schemas.session import Session
 from app.schemas.weekend import Weekend
-from app.services.apicountries import ApiCountries
+from app.services.restcountries import ApiCountries
 from app.services.openf1 import OpenF1
 
 
@@ -63,7 +63,7 @@ class F1Service:
             return Country.model_validate_json(cached)
 
         country_data, flag_base64 = await self._countries.get_country(alpha3_code)
-        country = Country.from_api_countries(country_data, flag_base64)
+        country = Country.from_rest_countries(country_data, flag_base64)
 
         await self._redis.set(cache_key, country.model_dump_json(), ex=60 * 60 * 24 * 7)
         return country

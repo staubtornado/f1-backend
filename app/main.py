@@ -6,7 +6,7 @@ from httpx import AsyncClient
 from redis.asyncio import Redis
 
 from app.api.routes import router
-from app.services.apicountries import ApiCountries
+from app.services.restcountries import ApiCountries
 from app.services.f1 import F1Service
 from app.services.openf1 import OpenF1
 
