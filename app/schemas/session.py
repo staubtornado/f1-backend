@@ -14,7 +14,7 @@ class Session(BaseModel):
 
     @classmethod
     def from_openf1(cls, data: dict) -> Self:
-        session_type_mapping = {
+        type_mapping = {
             "Qualifying": SessionType.QUALIFYING,
             "Practice 1": SessionType.PRACTICE_ONE,
             "Practice 2": SessionType.PRACTICE_TWO,
@@ -22,11 +22,14 @@ class Session(BaseModel):
             "Sprint": SessionType.SPRINT,
             "Sprint Qualifying": SessionType.SPRINT_QUALIFYING,
             "Race": SessionType.GRAND_PRIX,
+            "Day 1": SessionType.DAY_1,
+            "Day 2": SessionType.DAY_2,
+            "Day 3": SessionType.DAY_3,
         }
 
         return cls(
             id=data["session_key"],
-            type=session_type_mapping[data["session_name"]],
+            type=type_mapping[data["session_name"]],
             weekend_id=data["meeting_key"],
             start_time=data["date_start"],
         )
