@@ -4,7 +4,9 @@ from json import loads, dumps
 from httpx import HTTPStatusError
 from redis.asyncio import Redis
 
+from app.schemas.classification import Classification
 from app.schemas.country import Country
+from app.schemas.result import Result
 from app.schemas.session import Session
 from app.schemas.weekend import Weekend
 from app.services.restcountries import ApiCountries
@@ -55,6 +57,28 @@ class F1Service:
     async def get_weekend_sessions(self, weekend_id: int) -> list[Session]:
         data: list[dict] = await self._openf1.get_weekend_sessions(weekend_id)
         return [Session.from_openf1(entry) for entry in data]
+
+    async def get_session_results(self, session_id: int) -> Result:
+        cache_key = f"session:{session_id}"
+
+        if cached := await self._redis.get(cache_key):
+            return Result.model_validate_json(cached)
+
+        raw_classifications: list[dict] = await self._openf1.get_classifications(session_id)
+        classifications: list[Classification] = []
+
+        for i, raw in enumerate(raw_classifications):
+            gap_to_front = (raw["duration"] - raw_classifications[i - 1]["duration"]) if i > 0 else None
+            classifications.append(Classification.from_openf1(raw, gap_to_front))
+
+        result = Result(session_id=session_id, classifications=classifications)
+
+        await self._redis.set(
+            cache_key,
+            dumps(result.model_dump_json()),
+            ex=60 * 60 * 24,
+        )
+        return result
 
     async def _get_country(self, alpha3_code: str) -> Country:
         cache_key = f"country:{alpha3_code}"

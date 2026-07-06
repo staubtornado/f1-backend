@@ -59,6 +59,16 @@ class OpenF1:
         """
         return await self._call(f"{self.API_URL}/sessions?meeting_key={weekend_id}")
 
+    async def get_classifications(self, session_id: int) -> list[dict]:
+        """
+        Fetch the results for a given session.
+
+        :param session_id: The id of the target session is obtainable via ``get_weekend_sessions``.
+        :return: List of session result objects as returned by the OpenF1 API.
+        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
+        """
+        return await self._call(f"{self.API_URL}/session_result?session_key={session_id}")
+
     async def _call(self, url: str) -> dict | list:
         """
         Execute a rate-limited GET request.
