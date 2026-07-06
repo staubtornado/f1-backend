@@ -1,7 +1,6 @@
 from datetime import datetime
 from json import loads, dumps
 
-from httpx import HTTPStatusError
 from redis.asyncio import Redis
 
 from app.schemas.classification import Classification
@@ -9,14 +8,12 @@ from app.schemas.country import Country
 from app.schemas.result import Result
 from app.schemas.session import Session
 from app.schemas.weekend import Weekend
-from app.services.restcountries import ApiCountries
 from app.services.openf1 import OpenF1
 
 
 class F1Service:
-    def __init__(self, openf1: OpenF1, countries: ApiCountries, redis: Redis) -> None:
+    def __init__(self, openf1: OpenF1, redis: Redis) -> None:
         self._openf1 = openf1
-        self._countries = countries
         self._redis = redis
 
     async def get_seasons(self) -> list[int]:
@@ -37,10 +34,7 @@ class F1Service:
         raw_weekends: list[dict] = await self._openf1.get_season_weekends(season)
         weekends = []
         for raw in raw_weekends:
-            try:
-                country = await self._get_country(raw["country_code"])
-            except HTTPStatusError:
-                country = None
+            country = Country.from_openf1(raw)
             weekend = Weekend.from_openf1(raw, country)
             weekends.append(weekend)
 
@@ -79,15 +73,3 @@ class F1Service:
             ex=60 * 60 * 24,
         )
         return result
-
-    async def _get_country(self, alpha3_code: str) -> Country:
-        cache_key = f"country:{alpha3_code}"
-
-        if cached := await self._redis.get(cache_key):
-            return Country.model_validate_json(cached)
-
-        country_data, flag_base64 = await self._countries.get_country(alpha3_code)
-        country = Country.from_rest_countries(country_data, flag_base64)
-
-        await self._redis.set(cache_key, country.model_dump_json(), ex=60 * 60 * 24 * 7)
-        return country
