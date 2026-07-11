@@ -32,7 +32,11 @@ class OpenF1:
         :return: Ascending list of season years, e.g. ``[2023, 2024, 2025]``.
         :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
         """
-        data: list[dict] = await self._call_json(f"{self.API_URL}/sessions")
+        data: list[dict] | dict = await self._call_json(f"{self.API_URL}/sessions")
+
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+
         years: set[int] = set()
 
         for entry in data:
@@ -49,6 +53,10 @@ class OpenF1:
         """
 
         weekends = await self._call_json(f"{self.API_URL}/meetings?year={season}")
+
+        if not isinstance(weekends, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+
         for raw_weekend in weekends:
             flag_url = raw_weekend["country_flag"]
             flag_data = b64encode(await self._call_content(flag_url)).decode("utf-8")
@@ -65,7 +73,10 @@ class OpenF1:
         :return: List of session objects as returned by the OpenF1 API.
         :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
         """
-        return await self._call_json(f"{self.API_URL}/sessions?meeting_key={weekend_id}")
+        data = await self._call_json(f"{self.API_URL}/sessions?meeting_key={weekend_id}")
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+        return data
 
     async def get_classifications(self, session_id: int) -> list[dict]:
         """
@@ -75,7 +86,10 @@ class OpenF1:
         :return: List of session result objects as returned by the OpenF1 API.
         :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
         """
-        return await self._call_json(f"{self.API_URL}/session_result?session_key={session_id}")
+        data = await self._call_json(f"{self.API_URL}/session_result?session_key={session_id}")
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+        return data
 
     async def get_flag(self, flag_url: str) -> str:
         response = await self._client.get(flag_url)
