@@ -91,11 +91,6 @@ class OpenF1:
             raise ValueError("Unexpected data format from OpenF1 API")
         return data
 
-    async def get_flag(self, flag_url: str) -> str:
-        response = await self._client.get(flag_url)
-        response.raise_for_status()
-        return response.json()
-
     async def _call_json(self, url: str) -> dict | list:
         return (await self._call(url)).json()
 

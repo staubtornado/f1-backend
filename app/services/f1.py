@@ -69,7 +69,7 @@ class F1Service:
 
         await self._redis.set(
             cache_key,
-            dumps(result.model_dump_json()),
+            result.model_dump_json(),
             ex=60 * 60 * 24,
         )
         return result
