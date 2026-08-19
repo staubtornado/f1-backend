@@ -62,8 +62,10 @@ class F1Service:
         classifications: list[Classification] = []
 
         for i, raw in enumerate(raw_classifications):
-            gap_to_front = (raw["duration"] - raw_classifications[i - 1]["duration"]) if i > 0 else None
-            classifications.append(Classification.from_openf1(raw, gap_to_front))
+            try:
+                classifications.append(Classification.from_openf1(raw, classifications[i - 1] if i > 0 else None))
+            except ValueError:
+                pass
 
         result = Result(session_id=session_id, classifications=classifications)
 
