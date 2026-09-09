@@ -30,7 +30,7 @@ class Classification(BaseModel):
         else:
             data["duration"] = None
 
-        if data.get("duration") is not None:
+        if data.get("gap_to_leader") is not None:
             data["gap_to_leader"] = list(filter(lambda x: x, data["gap_to_leader"]))[-1]
         else:
             data["gap_to_leader"] = None
