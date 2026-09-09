@@ -2,6 +2,7 @@ from base64 import b64encode
 
 from aiolimiter import AsyncLimiter
 from httpx import AsyncClient, Response
+from datetime import datetime, timezone
 
 
 class OpenF1:
@@ -103,6 +104,47 @@ class OpenF1:
         entry["portrait_base64"] = portrait_base64
 
         return entry
+    
+    async def get_driver_standings(self, session_id: int) -> list[dict]:
+        data = await self._call_json(f"{self.API_URL}/championship_drivers?session_key={session_id}")
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+        return data
+
+    async def get_latest_points_session_id(self, season: int) -> int:
+        """
+        Return the session_key of the last completed points session of a season.
+        This includes both Race and Sprint sessions.
+        If the season is still running, it returns the latest session that has already happened.
+        """
+        data = await self._call_json(f"{self.API_URL}/sessions?year={season}")
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+
+        allowed_types = {"Race", "Sprint"}
+        valid_sessions: list[dict] = []
+
+        for entry in data:
+            if entry.get("session_type") not in allowed_types:
+                continue
+            if entry.get("is_cancelled", False):
+                continue
+            if not entry.get("date_start"):
+                continue
+
+            try:
+                started_at = datetime.fromisoformat(entry["date_start"].replace("Z", "+00:00"))
+            except ValueError:
+                continue
+
+            if started_at <= datetime.now(timezone.utc):
+                valid_sessions.append((started_at, entry))
+
+        if not valid_sessions:
+            raise ValueError(f"No completed Race/Sprint sessions found for season {season}")
+
+        _, latest_session = max(valid_sessions, key=lambda item: item[0])
+        return latest_session["session_key"]
 
     async def _call_json(self, url: str) -> dict | list:
         return (await self._call(url)).json()

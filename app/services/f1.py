@@ -6,6 +6,8 @@ from redis.asyncio import Redis
 from app.schemas.classification import Classification
 from app.schemas.country import Country
 from app.schemas.driver import Driver
+from app.schemas.driver_standing import DriverStanding
+from app.schemas.driver_standings import DriverStandings
 from app.schemas.result import Result
 from app.schemas.session import Session
 from app.schemas.weekend import Weekend
@@ -93,3 +95,26 @@ class F1Service:
             ex=60 * 60 * 24,
         )
         return driver
+    
+    async def get_driver_standings(self, season: int) -> DriverStandings:
+        cache_key = f"driver-standings:{season}"
+
+        if cached := await self._redis.get(cache_key):
+            return DriverStandings.model_validate_json(cached)
+
+        latest_session_id = await self._openf1.get_latest_points_session_id(season)
+        raw_standings: list[dict] = await self._openf1.get_driver_standings(latest_session_id)
+
+        standings = [DriverStanding.from_openf1(raw) for raw in raw_standings]
+
+        result = DriverStandings(
+            season=season,
+            standings=standings,
+        )
+
+        await self._redis.set(
+            cache_key,
+            result.model_dump_json(),
+            ex=60 * 60 * 24,
+        )
+        return result
