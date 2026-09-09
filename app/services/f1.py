@@ -63,10 +63,8 @@ class F1Service:
         classifications: list[Classification] = []
 
         for i, raw in enumerate(raw_classifications):
-            try:
-                classifications.append(Classification.from_openf1(raw, classifications[i - 1] if i > 0 else None))
-            except ValueError:
-                pass
+            classifications.append(
+                Classification.from_openf1(raw, classifications[-1] if len(classifications) else None))
 
         result = Result(session_id=session_id, classifications=classifications)
 

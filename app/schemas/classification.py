@@ -25,6 +25,16 @@ class Classification(BaseModel):
         elif data.get("dns", False):
             status = DriverRaceEndStatus.DNS
 
+        if data.get("duration") is not None:
+            data["duration"] = list(filter(lambda x: x, data["duration"]))[-1]
+        else:
+            data["duration"] = None
+
+        if data.get("duration") is not None:
+            data["gap_to_leader"] = list(filter(lambda x: x, data["gap_to_leader"]))[-1]
+        else:
+            data["gap_to_leader"] = None
+
         gap_to_front = None
         if front_classification and front_classification.time:
             if isinstance(own_time := data.get("duration"), (int, float)):
