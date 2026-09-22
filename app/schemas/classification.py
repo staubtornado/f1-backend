@@ -25,13 +25,17 @@ class Classification(BaseModel):
         elif data.get("dns", False):
             status = DriverRaceEndStatus.DNS
 
-        if data.get("duration") is not None:
+        if isinstance(data.get("duration"), list):
             data["duration"] = list(filter(lambda x: x, data["duration"]))[-1]
+        elif isinstance(data.get("duration"), float):
+            pass
         else:
             data["duration"] = None
 
-        if data.get("gap_to_leader") is not None:
+        if isinstance(data.get("gap_to_leader"), list):
             data["gap_to_leader"] = list(filter(lambda x: x, data["gap_to_leader"]))[-1]
+        elif isinstance(data.get("gap_to_leader"), float):
+            pass
         else:
             data["gap_to_leader"] = None
 
