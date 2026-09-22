@@ -185,6 +185,11 @@ class F1Service:
             for raw in data
         ]
 
+        if not starting_grid:
+            return []
+
+        starting_grid.sort(key=lambda entry: entry.position)
+
         await self._redis.set(
             cache_key,
             dumps([entry.model_dump_json() for entry in starting_grid]),
