@@ -34,3 +34,8 @@ async def get_session_results(session_id: int, client: F1Service = Depends(get_f
 @router.get("/seasons/{season}/drivers/{driver_id}")
 async def get_season_drivers(season: int, driver_id: int, client: F1Service = Depends(get_f1_service)):
     return await client.get_season_drivers(season, driver_id)
+
+
+@router.get("/standings/{season}/team_standings/")
+async def get_season_team_standings(season: int, client: F1Service = Depends(get_f1_service)):
+    return await client.get_season_team_standings(season)

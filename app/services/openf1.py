@@ -91,7 +91,7 @@ class OpenF1:
             raise ValueError("Unexpected data format from OpenF1 API")
         return data
 
-    async def get_season_drivers(self, weekend_id: int, driver_id: int) -> dict:
+    async def get_season_driver(self, weekend_id: int, driver_id: int) -> dict:
         data = await self._call_json(f"{self.API_URL}/drivers?driver_number={driver_id}&meeting_key={weekend_id}")
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
@@ -103,6 +103,13 @@ class OpenF1:
         entry["portrait_base64"] = portrait_base64
 
         return entry
+
+    async def get_season_team_standings(self, session_id: int) -> list[dict]:
+        data = await self._call_json(f"{self.API_URL}/championship_teams?session_key={session_id}")
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+
+        return data
 
     async def _call_json(self, url: str) -> dict | list:
         return (await self._call(url)).json()

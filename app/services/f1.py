@@ -1,13 +1,16 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from json import loads, dumps
 
 from redis.asyncio import Redis
 
+from app.schemas.TeamStandings import TeamStandings
 from app.schemas.classification import Classification
 from app.schemas.country import Country
 from app.schemas.driver import Driver
 from app.schemas.result import Result
 from app.schemas.session import Session
+from app.schemas.session_type import SessionType
+from app.schemas.team_standing import TeamStanding
 from app.schemas.weekend import Weekend
 from app.services.openf1 import OpenF1
 
@@ -84,7 +87,7 @@ class F1Service:
         weekends = await self.get_season_weekends(season)
         first_weekend_id = weekends[0].id
 
-        driver_data: dict = await self._openf1.get_season_drivers(first_weekend_id, driver_id)
+        driver_data: dict = await self._openf1.get_season_driver(first_weekend_id, driver_id)
         driver = Driver.from_openf1(driver_data)
 
         await self._redis.set(
@@ -93,3 +96,49 @@ class F1Service:
             ex=60 * 60 * 24,
         )
         return driver
+
+    async def get_season_team_standings(self, season: int) -> TeamStandings:
+        cache_key = f"season:{season}:team_standings"
+
+        if cached := await self._redis.get(cache_key):
+            return TeamStandings.model_validate_json(cached)
+
+        weekends = await self.get_season_weekends(season)
+        now = datetime.now(timezone.utc)
+        entry: Session | None = None
+        for weekend in sorted(weekends, key=lambda item: item.date_start, reverse=True):
+            if weekend.cancelled or weekend.date_start > now:
+                continue
+
+            sessions = await self.get_weekend_sessions(weekend.id)
+            entry = max(
+                (
+                    session for session in sessions
+                    if session.type == SessionType.GRAND_PRIX and session.start_time <= now
+                ),
+                key=lambda session: session.start_time,
+                default=None,
+            )
+            if entry is not None:
+                break
+
+        if entry is None:
+            raise ValueError(
+                f"Cannot retrieve team standings for season {season}: "
+                "no Grand Prix session has started in a non-cancelled weekend."
+            )
+        data = await self._openf1.get_season_team_standings(entry.id)
+        standings: list[TeamStanding] = []
+        for raw in data:
+            standings.append(TeamStanding.from_openf1(raw))
+        result = TeamStandings(season=season, standings=standings)
+
+        current_year = datetime.now().year
+        ex = 60 * 60 * 24 * 7 if season < current_year else 60 * 60
+
+        await self._redis.set(
+            cache_key,
+            result.model_dump_json(),
+            ex=ex,
+        )
+        return result
