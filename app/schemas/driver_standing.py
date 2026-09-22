@@ -1,7 +1,7 @@
-from time import clock_settime
 from typing import Self
 
 from pydantic import BaseModel
+
 
 class DriverStanding(BaseModel):
     position: int
@@ -15,4 +15,3 @@ class DriverStanding(BaseModel):
             driver_id=data["driver_number"],
             points=data["points_current"],
         )
-        

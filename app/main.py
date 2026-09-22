@@ -32,8 +32,8 @@ app = FastAPI(lifespan=lifespan)
 
 @app.exception_handler(HTTPStatusError)
 async def openf1_http_error_handler(
-    _request: Request,
-    exception: HTTPStatusError,
+        _request: Request,
+        exception: HTTPStatusError,
 ) -> Response:
     """Forward an OpenF1 HTTP error without replacing its status or body."""
     upstream_response = exception.response
