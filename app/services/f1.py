@@ -4,6 +4,7 @@ from json import loads, dumps
 from redis.asyncio import Redis
 
 from app.schemas.starting_grid import StartingGrid
+from app.schemas.starting_positon import StartingPosition
 from app.schemas.team_standings import TeamStandings
 from app.schemas.classification import Classification
 from app.schemas.country import Country
@@ -169,30 +170,45 @@ class F1Service:
         )
         return result
 
-    async def get_session_starting_grid(self, session_id: int) -> list[StartingGrid]:
-        cache_key = f"session:{session_id}:starting_grid"
+    async def get_session_starting_grid(self, weekend_id: int) -> list[StartingGrid]:
+        cache_key = f"weekend:{weekend_id}:starting_grid"
 
         if cached := await self._redis.get(cache_key):
             return [StartingGrid.model_validate_json(entry) for entry in loads(cached)]
 
-        data = await self._openf1.get_session_starting_grid(session_id)
-        starting_grid = [
-            StartingGrid(
-                position=raw["position"],
-                driver_id=raw["driver_number"],
-                lap_duration=raw["lap_duration"],
+        sessions = await self.get_weekend_sessions(weekend_id)
+        data = await self._openf1.get_session_starting_grid(weekend_id)
+
+        grids: list[StartingGrid] = []
+
+        for session in sessions:
+            if session.type not in (SessionType.QUALIFYING, SessionType.SPRINT_QUALIFYING):
+                continue
+
+            positions = [
+                StartingPosition(
+                    position=raw["position"],
+                    driver_id=raw["driver_number"],
+                )
+                for raw in data
+                if raw["session_key"] == session.id and raw["meeting_key"] == weekend_id
+            ]
+            positions.sort(key=lambda entry: entry.position)
+            grids.append(
+                StartingGrid(
+                    positions=positions,
+                    weekend_id=weekend_id,
+                    session_type=session.type,
+                    session_id=session.id,
+                )
             )
-            for raw in data
-        ]
 
-        if not starting_grid:
-            return []
-
-        starting_grid.sort(key=lambda entry: entry.position)
+        if not any(grid.positions for grid in grids):
+            return grids
 
         await self._redis.set(
             cache_key,
-            dumps([entry.model_dump_json() for entry in starting_grid]),
+            dumps([entry.model_dump_json() for entry in grids]),
             ex=60 * 60 * 24,
         )
-        return starting_grid
+        return grids

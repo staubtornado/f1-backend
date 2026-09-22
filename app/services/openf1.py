@@ -153,8 +153,8 @@ class OpenF1:
 
         return data
 
-    async def get_session_starting_grid(self, session_id: int) -> list[dict]:
-        data = await self._call_json(f"{self.API_URL}/starting_grid?session_key={session_id}")
+    async def get_session_starting_grid(self, weekend_id: int) -> list[dict]:
+        data = await self._call_json(f"{self.API_URL}/starting_grid?meeting_key={weekend_id}")
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
         return data

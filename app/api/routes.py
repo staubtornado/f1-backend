@@ -46,6 +46,6 @@ async def get_season_team_standings(season: int, client: F1Service = Depends(get
     return await client.get_season_team_standings(season)
 
 
-@router.get("/session/{session_id}/starting_grid/")
-async def get_session_starting_grid(session_id: int, client: F1Service = Depends(get_f1_service)):
-    return await client.get_session_starting_grid(session_id)
+@router.get("/weekend/{weekend_id}/starting_grid/")
+async def get_session_starting_grid(weekend_id: int, client: F1Service = Depends(get_f1_service)):
+    return await client.get_session_starting_grid(weekend_id)
