@@ -3,6 +3,7 @@ from json import loads, dumps
 
 from redis.asyncio import Redis
 
+from app.schemas.starting_grid import StartingGrid
 from app.schemas.team_standings import TeamStandings
 from app.schemas.classification import Classification
 from app.schemas.country import Country
@@ -167,3 +168,26 @@ class F1Service:
             ex=ex,
         )
         return result
+
+    async def get_session_starting_grid(self, session_id: int) -> list[StartingGrid]:
+        cache_key = f"session:{session_id}:starting_grid"
+
+        if cached := await self._redis.get(cache_key):
+            return [StartingGrid.model_validate_json(entry) for entry in loads(cached)]
+
+        data = await self._openf1.get_session_starting_grid(session_id)
+        starting_grid = [
+            StartingGrid(
+                position=raw["position"],
+                driver_id=raw["driver_number"],
+                lap_duration=raw["lap_duration"],
+            )
+            for raw in data
+        ]
+
+        await self._redis.set(
+            cache_key,
+            dumps([entry.model_dump_json() for entry in starting_grid]),
+            ex=60 * 60 * 24,
+        )
+        return starting_grid
