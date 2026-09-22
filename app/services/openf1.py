@@ -104,7 +104,7 @@ class OpenF1:
         entry["portrait_base64"] = portrait_base64
 
         return entry
-    
+
     async def get_driver_standings(self, session_id: int) -> list[dict]:
         data = await self._call_json(f"{self.API_URL}/championship_drivers?session_key={session_id}")
         if not isinstance(data, list):
@@ -122,7 +122,7 @@ class OpenF1:
             raise ValueError("Unexpected data format from OpenF1 API")
 
         allowed_types = {"Race", "Sprint"}
-        valid_sessions: list[dict] = []
+        valid_sessions: list[tuple] = []
 
         for entry in data:
             if entry.get("session_type") not in allowed_types:

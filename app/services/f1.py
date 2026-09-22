@@ -3,7 +3,7 @@ from json import loads, dumps
 
 from redis.asyncio import Redis
 
-from app.schemas.TeamStandings import TeamStandings
+from app.schemas.team_standings import TeamStandings
 from app.schemas.classification import Classification
 from app.schemas.country import Country
 from app.schemas.driver import Driver
