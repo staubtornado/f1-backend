@@ -1,8 +1,42 @@
+from asyncio import Lock, Semaphore, gather
 from base64 import b64encode
+from collections.abc import Awaitable, Callable
+from hashlib import sha256
+from json import dumps, loads
+from weakref import WeakValueDictionary
 
 from aiolimiter import AsyncLimiter
 from httpx import AsyncClient, Response
 from datetime import datetime, timezone
+from redis.asyncio import Redis
+
+
+class RedisCache:
+    """Cache serialized values and coalesce concurrent misses within a worker."""
+
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+        self._locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
+
+    async def get_or_load(
+            self,
+            key: str,
+            load: Callable[[], Awaitable[tuple[bytes, int]]],
+    ) -> bytes | str:
+        cached = await self._redis.get(key)
+        if cached is not None:
+            return cached
+
+        # Keep the lock alive until all callers have left, without retaining
+        # one lock forever for every session, driver or image ever requested.
+        lock = self._locks.setdefault(key, Lock())
+        async with lock:
+            cached = await self._redis.get(key)
+            if cached is not None:
+                return cached
+            value, ttl = await load()
+            await self._redis.set(key, value, ex=ttl)
+            return value
 
 
 class OpenF1:
@@ -21,8 +55,24 @@ class OpenF1:
 
     def __init__(self, client: AsyncClient) -> None:
         self._client = client
+        self._cache: RedisCache | None = None
+        self._image_downloads = Semaphore(8)
         self._per_second = AsyncLimiter(3, 1)
         self._per_minute = AsyncLimiter(30, 60)
+
+    def set_cache(self, cache: RedisCache) -> None:
+        self._cache = cache
+
+    async def _get_meetings(self, season: int) -> list[dict]:
+        ttl = 60 * 60 * 24 * 7 if season < datetime.now(timezone.utc).year else 60 * 60
+        data = await self._call_json(f"{self.API_URL}/meetings?year={season}", ttl=ttl)
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+        return data
+
+    async def get_first_weekend_id(self, season: int) -> int:
+        # Driver lookups need only the meeting id, not every country's flag.
+        return (await self._get_meetings(season))[0]["meeting_key"]
 
     async def get_seasons(self) -> list[int]:
         """
@@ -53,15 +103,12 @@ class OpenF1:
         :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
         """
 
-        weekends = await self._call_json(f"{self.API_URL}/meetings?year={season}")
-
-        if not isinstance(weekends, list):
-            raise ValueError("Unexpected data format from OpenF1 API")
-
+        weekends = await self._get_meetings(season)
+        flag_urls = list(dict.fromkeys(raw["country_flag"] for raw in weekends))
+        flags = await gather(*(self._get_image_base64(url) for url in flag_urls))
+        flags_by_url = dict(zip(flag_urls, flags))
         for raw_weekend in weekends:
-            flag_url = raw_weekend["country_flag"]
-            flag_data = b64encode(await self._call_content(flag_url)).decode("utf-8")
-            raw_weekend["country_flag"] = flag_data
+            raw_weekend["country_flag"] = flags_by_url[raw_weekend["country_flag"]]
         return weekends
 
     async def get_weekend_sessions(self, weekend_id: int) -> list[dict]:
@@ -93,14 +140,18 @@ class OpenF1:
         return data
 
     async def get_season_driver(self, weekend_id: int, driver_id: int) -> dict:
-        data = await self._call_json(f"{self.API_URL}/drivers?driver_number={driver_id}&meeting_key={weekend_id}")
+        # All drivers of a meeting share one upstream response. Loading a grid
+        # of driver cards must not consume one API rate-limit token per card.
+        data = await self._call_json(
+            f"{self.API_URL}/drivers?meeting_key={weekend_id}", ttl=60 * 60 * 24,
+        )
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
 
-        entry: dict = data[0]
+        entry: dict = [raw for raw in data if raw["driver_number"] == driver_id][0]
 
         portrait_url = entry["headshot_url"]
-        portrait_base64 = b64encode(await self._call_content(portrait_url)).decode("utf-8")
+        portrait_base64 = await self._get_image_base64(portrait_url)
         entry["portrait_base64"] = portrait_base64
 
         return entry
@@ -159,11 +210,38 @@ class OpenF1:
             raise ValueError("Unexpected data format from OpenF1 API")
         return data
 
-    async def _call_json(self, url: str) -> dict | list:
-        return (await self._call(url)).json()
+    async def _call_json(self, url: str, *, ttl: int = 0) -> dict | list:
+        if self._cache is None or not ttl:
+            return (await self._call(url)).json()
+
+        async def load() -> tuple[bytes, int]:
+            data = (await self._call(url)).json()
+            if not isinstance(data, list):
+                raise ValueError("Unexpected data format from OpenF1 API")
+            return dumps(data, separators=(",", ":")).encode(), ttl if data else 30
+
+        key = f"openf1:json:v1:{sha256(url.encode()).hexdigest()}"
+        return loads(await self._cache.get_or_load(key, load))
+
+    async def _get_image_base64(self, url: str) -> str:
+        async def load() -> tuple[bytes, int]:
+            return b64encode(await self._call_content(url)), 60 * 60 * 24 * 7
+
+        if self._cache is None:
+            content, _ = await load()
+        else:
+            key = f"openf1:image:v1:{sha256(url.encode()).hexdigest()}"
+            content = await self._cache.get_or_load(key, load)
+        return content.decode("ascii") if isinstance(content, bytes) else content
 
     async def _call_content(self, url: str) -> bytes:
-        return (await self._call(url)).content
+        async with self._image_downloads:
+            # CDN downloads do not count towards the OpenF1 API quota.
+            if url.startswith(f"{self.API_URL}/"):
+                return (await self._call(url)).content
+            response = await self._client.get(url)
+            response.raise_for_status()
+            return response.content
 
     async def _call(self, url: str) -> Response:
         """
