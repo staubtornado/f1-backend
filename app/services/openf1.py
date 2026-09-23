@@ -1,20 +1,28 @@
-from asyncio import Lock, Semaphore, gather
+from asyncio import Lock, Semaphore, gather, sleep
 from base64 import b64encode
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from json import dumps, loads
+from math import isfinite
+from time import monotonic
 from weakref import WeakValueDictionary
 
 from aiolimiter import AsyncLimiter
 from httpx import AsyncClient, Response
-from datetime import datetime, timezone
 from redis.asyncio import Redis
 
 
 class RedisCache:
-    """Cache serialized values and coalesce concurrent misses within a worker."""
-
     def __init__(self, redis: Redis) -> None:
+        """
+        Initialize the cache with per-key locks for concurrent misses in this worker.
+
+        Locks are removed once no callers hold a reference to them.
+
+        :param redis: Shared Redis connection managed by the caller.
+        """
         self._redis = redis
         self._locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
 
@@ -23,56 +31,57 @@ class RedisCache:
             key: str,
             load: Callable[[], Awaitable[tuple[bytes, int]]],
     ) -> bytes | str:
+        """
+        Retrieve a serialized value or load and cache it under a per-key lock.
+
+        The cache is checked again after acquiring the lock. Failed loads are not cached.
+
+        :param key: Redis cache key.
+        :param load: Async callback returning the value and its lifetime in seconds.
+        :return: Cached value as bytes or a string, depending on the Redis configuration.
+        """
         cached = await self._redis.get(key)
         if cached is not None:
             return cached
 
-        # Keep the lock alive until all callers have left, without retaining
-        # one lock forever for every session, driver or image ever requested.
         lock = self._locks.setdefault(key, Lock())
         async with lock:
             cached = await self._redis.get(key)
             if cached is not None:
                 return cached
+
             value, ttl = await load()
             await self._redis.set(key, value, ex=ttl)
             return value
 
 
 class OpenF1:
-    """
-    Client for the OpenF1 REST API.
-
-    Wraps HTTP communication and rate limiting against the public
-    OpenF1 API (https://api.openf1.org/v1). Rate limits are enforced
-    at 3 requests/second and 30 requests/minute.
-
-    :param client: Shared async HTTP client instance. Lifecycle management
-        (creation and teardown) is the caller's responsibility.
-    """
-
     API_URL = "https://api.openf1.org/v1"
 
     def __init__(self, client: AsyncClient) -> None:
+        """
+        Initialize the OpenF1 client with request pacing and bounded image downloads.
+
+        API requests are spaced at least 2.1 seconds apart within this client.
+        Image downloads allow up to eight concurrent requests.
+
+        :param client: Shared async HTTP client managed by the caller.
+        """
         self._client = client
         self._cache: RedisCache | None = None
         self._image_downloads = Semaphore(8)
-        self._per_second = AsyncLimiter(3, 1)
-        self._per_minute = AsyncLimiter(30, 60)
+        self._request_lock = Lock()
+        self._retry_at = 0.0
+        self._per_second = AsyncLimiter(1, 0.35)
+        self._per_minute = AsyncLimiter(1, 2.1)
 
     def set_cache(self, cache: RedisCache) -> None:
+        """
+        Attach the cache used for meeting data, driver data and images.
+
+        :param cache: Redis cache shared with the F1 service.
+        """
         self._cache = cache
-
-    async def _get_meetings(self, season: int) -> list[dict]:
-        ttl = 60 * 60 * 24 * 7 if season < datetime.now(timezone.utc).year else 60 * 60
-        data = await self._call_json(f"{self.API_URL}/meetings?year={season}", ttl=ttl)
-        if not isinstance(data, list):
-            raise ValueError("Unexpected data format from OpenF1 API")
-        return data
-
-    async def get_first_weekend_id(self, season: int) -> int:
-        # Driver lookups need only the meeting id, not every country's flag.
-        return (await self._get_meetings(season))[0]["meeting_key"]
 
     async def get_seasons(self) -> list[int]:
         """
@@ -81,7 +90,8 @@ class OpenF1:
         Retrieves all sessions from the API and deduplicates by year.
 
         :return: Ascending list of season years, e.g. ``[2023, 2024, 2025]``.
-        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
+        :raises ValueError: If the API response is not a list.
+        :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
         """
         data: list[dict] | dict = await self._call_json(f"{self.API_URL}/sessions")
 
@@ -98,28 +108,44 @@ class OpenF1:
         """
         Fetch all race weekends for a given season.
 
-        :param season: The season year, e.g. ``2024``.
-        :return: List of meeting objects as returned by the OpenF1 API.
-        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
-        """
+        Distinct country flags are loaded concurrently and reused from the image cache.
 
-        weekends = await self._get_meetings(season)
-        flag_urls = list(dict.fromkeys(raw["country_flag"] for raw in weekends))
+        :param season: The season year, e.g. ``2024``.
+        :return: Meeting objects with base64-encoded flags, or empty strings for missing URLs.
+        :raises ValueError: If the API response is not a list.
+        :raises httpx.HTTPStatusError: If fetching meetings or an image fails.
+        """
+        weekends: list[dict] = await self._get_meetings(season)
+        flag_urls: list[str | None] = list(dict.fromkeys(raw["country_flag"] for raw in weekends))
         flags = await gather(*(self._get_image_base64(url) for url in flag_urls))
-        flags_by_url = dict(zip(flag_urls, flags))
+        flags_by_url: dict[str | None, str] = dict(zip(flag_urls, flags))
+
         for raw_weekend in weekends:
             raw_weekend["country_flag"] = flags_by_url[raw_weekend["country_flag"]]
         return weekends
+
+    async def get_first_weekend_id(self, season: int) -> int | None:
+        """
+        Retrieve the first weekend id in API order without downloading country flags.
+
+        :param season: The season year.
+        :return: The first meeting key, or None if the season contains no meetings.
+        """
+        weekends: list[dict] = await self._get_meetings(season)
+        if not weekends:
+            return None
+        return weekends[0]["meeting_key"]
 
     async def get_weekend_sessions(self, weekend_id: int) -> list[dict]:
         """
         Fetch all sessions for a given race weekend.
 
-        Sessions include practice, qualifying, sprint, and race.
+        Sessions include practice, qualifying, sprint, race and testing sessions.
 
         :param weekend_id: The id of the target weekend is obtainable via ``get_season_weekends``.
         :return: List of session objects as returned by the OpenF1 API.
-        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
+        :raises ValueError: If the API response is not a list.
+        :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
         """
         data = await self._call_json(f"{self.API_URL}/sessions?meeting_key={weekend_id}")
         if not isinstance(data, list):
@@ -132,31 +158,78 @@ class OpenF1:
 
         :param session_id: The id of the target session is obtainable via ``get_weekend_sessions``.
         :return: List of session result objects as returned by the OpenF1 API.
-        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
+        :raises ValueError: If the API response is not a list.
+        :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
         """
         data = await self._call_json(f"{self.API_URL}/session_result?session_key={session_id}")
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
         return data
 
-    async def get_season_driver(self, weekend_id: int, driver_id: int) -> dict:
-        # All drivers of a meeting share one upstream response. Loading a grid
-        # of driver cards must not consume one API rate-limit token per card.
+    async def get_season_driver(
+            self,
+            weekend_id: int,
+            driver_id: int,
+            *,
+            season: int | None = None,
+    ) -> dict | None:
+        """
+        Retrieve a driver profile and add its base64-encoded portrait.
+
+        All drivers of the initial weekend share one cached API response. If the
+        driver is absent and a season is supplied, restrict fallback data to that season.
+
+        :param weekend_id: The meeting key to check first.
+        :param driver_id: The driver's racing number.
+        :param season: Optional season year used for the fallback search.
+        :return: Driver data, or None if absent. Missing portraits use an empty string.
+        :raises ValueError: If an API response is not a list.
+        :raises httpx.HTTPStatusError: If fetching driver data or the portrait fails.
+        """
         data = await self._call_json(
-            f"{self.API_URL}/drivers?meeting_key={weekend_id}", ttl=60 * 60 * 24,
+            f"{self.API_URL}/drivers?meeting_key={weekend_id}",
+            ttl=60 * 60 * 24,
         )
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
 
-        entry: dict = [raw for raw in data if raw["driver_number"] == driver_id][0]
+        drivers: list[dict] = [raw for raw in data if raw["driver_number"] == driver_id]
 
-        portrait_url = entry["headshot_url"]
+        if not drivers and season is not None:
+            weekends = await self._get_meetings(season)
+            weekend_ids = {raw["meeting_key"] for raw in weekends}
+            data = await self._call_json(
+                f"{self.API_URL}/drivers?driver_number={driver_id}",
+                ttl=60 * 60,
+            )
+            if not isinstance(data, list):
+                raise ValueError("Unexpected data format from OpenF1 API")
+
+            drivers = [
+                raw for raw in data
+                if raw["driver_number"] == driver_id and raw["meeting_key"] in weekend_ids
+            ]
+
+        if not drivers:
+            return None
+
+        entry: dict = drivers[0]
+
+        portrait_url = entry.get("headshot_url")
         portrait_base64 = await self._get_image_base64(portrait_url)
         entry["portrait_base64"] = portrait_base64
 
         return entry
 
     async def get_driver_standings(self, session_id: int) -> list[dict]:
+        """
+        Fetch driver championship standings for a session.
+
+        :param session_id: The OpenF1 session key.
+        :return: Driver standings as returned by the API.
+        :raises ValueError: If the API response is not a list.
+        :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
+        """
         data = await self._call_json(f"{self.API_URL}/championship_drivers?session_key={session_id}")
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
@@ -164,9 +237,14 @@ class OpenF1:
 
     async def get_latest_points_session_id(self, season: int) -> int:
         """
-        Return the session_key of the last completed points session of a season.
-        This includes both Race and Sprint sessions.
-        If the season is still running, it returns the latest session that has already happened.
+        Retrieve the latest non-cancelled Race or Sprint session that has started.
+
+        Selection uses the start time; the session does not have to be completed.
+
+        :param season: The season year.
+        :return: The latest eligible session key.
+        :raises ValueError: If the response is not a list or no eligible session exists.
+        :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
         """
         data = await self._call_json(f"{self.API_URL}/sessions?year={season}")
         if not isinstance(data, list):
@@ -198,6 +276,14 @@ class OpenF1:
         return latest_session["session_key"]
 
     async def get_season_team_standings(self, session_id: int) -> list[dict]:
+        """
+        Fetch team championship standings for a session.
+
+        :param session_id: The OpenF1 session key.
+        :return: Team standings as returned by the API.
+        :raises ValueError: If the API response is not a list.
+        :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
+        """
         data = await self._call_json(f"{self.API_URL}/championship_teams?session_key={session_id}")
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
@@ -205,12 +291,51 @@ class OpenF1:
         return data
 
     async def get_session_starting_grid(self, weekend_id: int) -> list[dict]:
+        """
+        Fetch starting-grid entries for a race weekend.
+
+        :param weekend_id: The OpenF1 meeting key.
+        :return: Grid entries as returned by the API, without sorting or grouping.
+        :raises ValueError: If the API response is not a list.
+        :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
+        """
         data = await self._call_json(f"{self.API_URL}/starting_grid?meeting_key={weekend_id}")
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
         return data
 
+    async def _get_meetings(self, season: int) -> list[dict]:
+        """
+        Retrieve meeting data while preserving the original country flag URLs.
+
+        Past seasons are cached for a week, other seasons for an hour and empty lists
+        for 30 seconds, provided a cache is attached.
+
+        :param season: The season year.
+        :return: Meeting objects as returned by the API.
+        :raises ValueError: If the API response is not a list.
+        """
+        current_year = datetime.now(timezone.utc).year
+        ttl = 60 * 60 * 24 * 7 if season < current_year else 60 * 60
+
+        data = await self._call_json(f"{self.API_URL}/meetings?year={season}", ttl=ttl)
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+        return data
+
     async def _call_json(self, url: str, *, ttl: int = 0) -> dict | list:
+        """
+        Fetch JSON and optionally cache a list response.
+
+        Cached values are deserialized on each read so callers can modify them safely.
+        Empty lists are cached for 30 seconds.
+
+        :param url: Full API request URL.
+        :param ttl: Cache lifetime in seconds; zero disables caching for this call.
+        :return: Decoded JSON response.
+        :raises ValueError: If JSON decoding fails or a cacheable response is not a list.
+        :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
+        """
         if self._cache is None or not ttl:
             return (await self._call(url)).json()
 
@@ -218,43 +343,118 @@ class OpenF1:
             data = (await self._call(url)).json()
             if not isinstance(data, list):
                 raise ValueError("Unexpected data format from OpenF1 API")
-            return dumps(data, separators=(",", ":")).encode(), ttl if data else 30
 
-        key = f"openf1:json:v1:{sha256(url.encode()).hexdigest()}"
-        return loads(await self._cache.get_or_load(key, load))
+            content = dumps(data, separators=(",", ":")).encode()
+            ex = ttl if data else 30
+            return content, ex
 
-    async def _get_image_base64(self, url: str) -> str:
+        cache_key = f"openf1:json:v1:{sha256(url.encode()).hexdigest()}"
+        cached = await self._cache.get_or_load(cache_key, load)
+        return loads(cached)
+
+    async def _get_image_base64(self, url: str | None) -> str:
+        """
+        Retrieve a base64-encoded image and cache it by URL for one week.
+
+        :param url: Image URL, which may be missing or empty.
+        :return: Base64-encoded image, or an empty string when no URL is provided.
+        :raises httpx.HTTPStatusError: If the image download fails.
+        """
+        if not url:
+            return ""
+
+        image_url: str = url
+
         async def load() -> tuple[bytes, int]:
-            return b64encode(await self._call_content(url)), 60 * 60 * 24 * 7
+            image_data = await self._call_content(image_url)
+            return b64encode(image_data), 60 * 60 * 24 * 7
 
         if self._cache is None:
             content, _ = await load()
         else:
-            key = f"openf1:image:v1:{sha256(url.encode()).hexdigest()}"
-            content = await self._cache.get_or_load(key, load)
-        return content.decode("ascii") if isinstance(content, bytes) else content
+            cache_key = f"openf1:image:v1:{sha256(url.encode()).hexdigest()}"
+            content = await self._cache.get_or_load(cache_key, load)
+
+        if isinstance(content, bytes):
+            return content.decode("ascii")
+        return content
 
     async def _call_content(self, url: str) -> bytes:
+        """
+        Download image bytes while limiting concurrent downloads.
+
+        OpenF1 API URLs use the API limiter and retries. External image URLs are
+        requested directly without consuming the API quota.
+
+        :param url: Full image URL.
+        :return: Raw image bytes.
+        :raises httpx.HTTPStatusError: If the image download fails.
+        """
         async with self._image_downloads:
-            # CDN downloads do not count towards the OpenF1 API quota.
             if url.startswith(f"{self.API_URL}/"):
                 return (await self._call(url)).content
+
             response = await self._client.get(url)
             response.raise_for_status()
             return response.content
 
     async def _call(self, url: str) -> Response:
         """
-        Execute a rate-limited GET request.
+        Execute a rate-limited GET request with up to two retries on HTTP 429.
 
-        Blocks the calling coroutine until both the per-second and
-        per-minute limiters have a token available.
+        Requests share a lock and cooldown within this client. Each attempt waits
+        for both rate limiters. A final HTTP 429 also delays the next request.
 
         :param url: Full request URL.
-        :return: Deserialized JSON response body.
-        :raises httpx.HTTPStatusError: If the upstream request returns a non-2xx status.
+        :return: HTTP response.
+        :raises httpx.HTTPStatusError: If retries are exhausted or another HTTP error occurs.
         """
-        async with self._per_second, self._per_minute:
-            response = await self._client.get(url)
-            response.raise_for_status()
-            return response
+        async with self._request_lock:
+            attempt = 0
+            while True:
+                delay = self._retry_at - monotonic()
+                if delay > 0:
+                    await sleep(delay)
+
+                async with self._per_minute, self._per_second:
+                    response = await self._client.get(url)
+
+                if response.status_code == 429:
+                    delay = self._get_retry_delay(response, attempt)
+                    self._retry_at = monotonic() + delay
+                    if attempt < 2:
+                        attempt += 1
+                        continue
+
+                break
+
+        response.raise_for_status()
+        return response
+
+    @staticmethod
+    def _get_retry_delay(response: Response, attempt: int) -> float:
+        """
+        Determine the cooldown from Retry-After or exponential backoff.
+
+        Retry-After may contain seconds or an HTTP date. Missing or invalid values
+        fall back to 2, 4 or 8 seconds for the three request attempts.
+
+        :param response: The HTTP 429 response.
+        :param attempt: Zero-based index of the failed attempt.
+        :return: Non-negative delay in seconds.
+        """
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                delay = float(retry_after)
+                if isfinite(delay):
+                    return max(0.0, delay)
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                    return max(0.0, delay)
+                except (TypeError, ValueError, OverflowError):
+                    pass
+
+        return 2.0 ** (attempt + 1)
