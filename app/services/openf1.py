@@ -235,15 +235,15 @@ class OpenF1:
             raise ValueError("Unexpected data format from OpenF1 API")
         return data
 
-    async def get_latest_points_session_id(self, season: int) -> int:
+    async def get_latest_points_session_id(self, season: int) -> int | None:
         """
         Retrieve the latest non-cancelled Race or Sprint session that has started.
 
         Selection uses the start time; the session does not have to be completed.
 
         :param season: The season year.
-        :return: The latest eligible session key.
-        :raises ValueError: If the response is not a list or no eligible session exists.
+        :return: The latest eligible session key, or None if no eligible session exists.
+        :raises ValueError: If the response is not a list.
         :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
         """
         data = await self._call_json(f"{self.API_URL}/sessions?year={season}")
@@ -270,7 +270,7 @@ class OpenF1:
                 valid_sessions.append((started_at, entry))
 
         if not valid_sessions:
-            raise ValueError(f"No completed Race/Sprint sessions found for season {season}")
+            return None
 
         _, latest_session = max(valid_sessions, key=lambda item: item[0])
         return latest_session["session_key"]

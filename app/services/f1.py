@@ -186,14 +186,18 @@ class F1Service:
         """
         Retrieve driver standings from the latest started Race or Sprint session.
 
+        Seasons without a started eligible session return empty standings.
+
         :param season: The season year.
         :return: Standings cached by season age, or empty standings cached for 30 seconds.
-        :raises ValueError: If no eligible session has started in the season.
         """
         cache_key = f"driver-standings:{season}"
 
         async def fetch() -> DriverStandings:
             latest_session_id = await self._openf1.get_latest_points_session_id(season)
+            if latest_session_id is None:
+                return DriverStandings(season=season, standings=[])
+
             raw_standings: list[dict] = await self._openf1.get_driver_standings(latest_session_id)
             standings = [DriverStanding.from_openf1(raw) for raw in raw_standings]
 
@@ -211,9 +215,10 @@ class F1Service:
         """
         Retrieve team standings from the latest started Grand Prix in a valid weekend.
 
+        Seasons without a started Grand Prix in a valid weekend return empty standings.
+
         :param season: The season year.
         :return: Standings cached by season age, or empty standings cached for 30 seconds.
-        :raises ValueError: If no Grand Prix has started in a non-cancelled weekend.
         """
         cache_key = f"season:{season}:team_standings"
 
@@ -238,10 +243,7 @@ class F1Service:
                     break
 
             if entry is None:
-                raise ValueError(
-                    f"Cannot retrieve team standings for season {season}: "
-                    "no Grand Prix session has started in a non-cancelled weekend."
-                )
+                return TeamStandings(season=season, standings=[])
 
             data: list[dict] = await self._openf1.get_season_team_standings(entry.id)
             standings: list[TeamStanding] = []
