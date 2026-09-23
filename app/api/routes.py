@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from starlette.requests import Request
 
+from app.schemas.race_position import RacePosition
 from app.services.f1 import F1Service
 
 
@@ -49,3 +50,8 @@ async def get_season_team_standings(season: int, client: F1Service = Depends(get
 @router.get("/weekend/{weekend_id}/starting_grid/")
 async def get_session_starting_grid(weekend_id: int, client: F1Service = Depends(get_f1_service)):
     return await client.get_session_starting_grid(weekend_id)
+
+
+@router.get("/grand-prix/{session_id}/positions/", response_model=list[RacePosition])
+async def get_grand_prix_session_positions(session_id: int, client: F1Service = Depends(get_f1_service)):
+    return await client.get_grand_prix_session_positions(session_id)

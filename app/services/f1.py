@@ -12,6 +12,7 @@ from app.schemas.country import Country
 from app.schemas.driver import Driver
 from app.schemas.driver_standing import DriverStanding
 from app.schemas.driver_standings import DriverStandings
+from app.schemas.race_position import RacePosition
 from app.schemas.result import Result
 from app.schemas.session import Session
 from app.schemas.session_type import SessionType
@@ -32,6 +33,7 @@ DRIVER = TypeAdapter(Driver)
 DRIVER_STANDINGS = TypeAdapter(DriverStandings)
 TEAM_STANDINGS = TypeAdapter(TeamStandings)
 STARTING_GRIDS = TypeAdapter(list[StartingGrid])
+RACE_POSITIONS = TypeAdapter(list[RacePosition])
 
 DAY = 60 * 60 * 24
 WEEK = DAY * 7
@@ -307,6 +309,44 @@ class F1Service:
             STARTING_GRIDS,
             fetch,
             lambda grids: DAY if grids and all(grid.positions for grid in grids) else EMPTY_TTL,
+        )
+
+    async def get_grand_prix_session_positions(self, session_id: int) -> list[RacePosition]:
+        """
+        Retrieve chronological position changes with session-specific driver profiles.
+
+        Results, including empty lists, are cached for 30 seconds so ongoing
+        sessions continue to receive updates.
+
+        :param session_id: The OpenF1 session key.
+        :return: Position changes for all drivers in the session.
+        :raises HTTPException: HTTP 502 if a position references a missing driver.
+        """
+        async def fetch() -> list[RacePosition]:
+            data = await self._openf1.get_grand_prix_session_positions(session_id)
+            if not data:
+                return []
+
+            raw_drivers = await self._openf1.get_session_drivers(session_id)
+            drivers = {raw["driver_number"]: Driver.from_openf1(raw) for raw in raw_drivers}
+            positions: list[RacePosition] = []
+            for raw in data:
+                driver = drivers.get(raw["driver_number"])
+                if driver is None:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Driver {raw['driver_number']} missing from OpenF1 session {session_id}.",
+                    )
+                positions.append(RacePosition.from_openf1(raw, driver))
+
+            positions.sort(key=lambda entry: entry.timestamp)
+            return positions
+
+        return await self._cached(
+            f"grand-prix:{session_id}:positions",
+            RACE_POSITIONS,
+            fetch,
+            30,
         )
 
     async def _cached(

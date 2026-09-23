@@ -186,24 +186,16 @@ class OpenF1:
         :raises ValueError: If an API response is not a list.
         :raises httpx.HTTPStatusError: If fetching driver data or the portrait fails.
         """
-        data = await self._call_json(
-            f"{self.API_URL}/drivers?meeting_key={weekend_id}",
-            ttl=60 * 60 * 24,
-        )
-        if not isinstance(data, list):
-            raise ValueError("Unexpected data format from OpenF1 API")
-
+        data = await self._get_drivers(f"meeting_key={weekend_id}")
         drivers: list[dict] = [raw for raw in data if raw["driver_number"] == driver_id]
 
         if not drivers and season is not None:
             weekends = await self._get_meetings(season)
             weekend_ids = {raw["meeting_key"] for raw in weekends}
-            data = await self._call_json(
-                f"{self.API_URL}/drivers?driver_number={driver_id}",
+            data = await self._get_drivers(
+                f"driver_number={driver_id}",
                 ttl=60 * 60,
             )
-            if not isinstance(data, list):
-                raise ValueError("Unexpected data format from OpenF1 API")
 
             drivers = [
                 raw for raw in data
@@ -213,13 +205,19 @@ class OpenF1:
         if not drivers:
             return None
 
-        entry: dict = drivers[0]
+        return await self._with_driver_portrait(drivers[0])
 
-        portrait_url = entry.get("headshot_url")
-        portrait_base64 = await self._get_image_base64(portrait_url)
-        entry["portrait_base64"] = portrait_base64
+    async def get_session_drivers(self, session_id: int) -> list[dict]:
+        """
+        Retrieve all driver profiles for a session with base64-encoded portraits.
 
-        return entry
+        :param session_id: The OpenF1 session key.
+        :return: Driver profiles with an empty portrait string if no image URL exists.
+        :raises ValueError: If the API response is not a list.
+        :raises httpx.HTTPStatusError: If fetching driver data or a portrait fails.
+        """
+        drivers = await self._get_drivers(f"session_key={session_id}")
+        return list(await gather(*(self._with_driver_portrait(driver) for driver in drivers)))
 
     async def get_driver_standings(self, session_id: int) -> list[dict]:
         """
@@ -303,6 +301,35 @@ class OpenF1:
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
         return data
+
+    async def get_grand_prix_session_positions(self, session_id: int) -> list[dict]:
+        """Fetch all position changes for the given OpenF1 session key."""
+        data = await self._call_json(f"{self.API_URL}/position?session_key={session_id}")
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+        return data
+
+    async def _get_drivers(self, query: str, *, ttl: int = 60 * 60 * 24) -> list[dict]:
+        """
+        Fetch and validate cached driver data before selecting or enriching profiles.
+
+        :param query: OpenF1 filters, e.g. ``meeting_key=1217`` or ``session_key=9144``.
+        :param ttl: Cache lifetime in seconds; empty responses use 30 seconds.
+        :return: Driver objects as returned by OpenF1, without portrait downloads.
+        :raises ValueError: If the API response is not a list.
+        """
+        data = await self._call_json(
+            f"{self.API_URL}/drivers?{query}",
+            ttl=ttl,
+        )
+        if not isinstance(data, list):
+            raise ValueError("Unexpected data format from OpenF1 API")
+        return data
+
+    async def _with_driver_portrait(self, driver: dict) -> dict:
+        """Copy a driver profile and add its cached portrait, or an empty string."""
+        portrait = await self._get_image_base64(driver.get("headshot_url"))
+        return {**driver, "portrait_base64": portrait}
 
     async def _get_meetings(self, season: int) -> list[dict]:
         """
