@@ -7,6 +7,8 @@ from app.schemas.country import Country
 
 
 class Weekend(BaseModel):
+    """A meeting's dates, country, circuit, UTC offset and cancellation flag."""
+
     name: str
     id: int
     country: Country | None
@@ -18,6 +20,15 @@ class Weekend(BaseModel):
 
     @classmethod
     def from_openf1(cls, data: dict, country: Country | None) -> Self:
+        """
+        Convert an OpenF1 meeting and attach supplied country metadata.
+
+        :param data: Meeting record including ``is_cancelled`` and ``gmt_offset``.
+        :param country: Enriched country metadata, or None if supplied by the caller.
+        :return: Weekend with parsed datetimes and a timedelta UTC offset.
+        :raises KeyError: If a required field is missing.
+        :raises pydantic.ValidationError: If the model fields fail validation.
+        """
         return cls(
             id=data["meeting_key"],
             name=data["meeting_name"],

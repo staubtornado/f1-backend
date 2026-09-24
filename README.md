@@ -1,149 +1,67 @@
 # F1 Backend
 
-A lightweight FastAPI backend that provides Formula 1 season, race weekend, and session data.
+A FastAPI backend for Formula 1 seasons, weekends, sessions, results, drivers,
+championship standings, starting grids and position updates. It retrieves data
+from OpenF1, downloads flags and portraits from the supplied image URLs, and
+caches responses in Redis.
 
-The backend uses the public OpenF1 API as its main data source and enriches race weekend information with country metadata and flag data. Redis is used to cache frequently requested data.
+## Run locally
 
-## API Overview
+Use Python 3.11 or newer with an activated virtual environment:
 
-The API currently provides three main endpoint groups:
-
-1. Available Formula 1 seasons
-2. Race weekends for a selected season
-3. Sessions for a selected race weekend
-
-Base URL during local development:
-
-```text
-http://localhost:8000
+```bash
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload
 ```
+
+Redis must be available at `127.0.0.1`, or at the hostname set by `REDIS_HOST`.
+The local API is available at `http://localhost:8000`, with interactive HTTP
+documentation at `/docs` and its OpenAPI schema at `/openapi.json`.
 
 ## Endpoints
 
-### Get all available seasons
+All endpoints use GET.
 
-```http
-GET /seasons/
-```
+| Path | Response |
+| --- | --- |
+| `/seasons/` | Ascending list of available season years |
+| `/seasons/{season}/weekends/` | Weekends with country metadata and encoded flags |
+| `/weekend/{weekend_id}/sessions/` | Sessions, including testing days when present |
+| `/session/{session_id}/result/` | Session classifications |
+| `/seasons/{season}/drivers/{driver_id}/` | Driver profile with an encoded portrait |
+| `/standings/{season}/driver_standings/` | Driver championship standings |
+| `/standings/{season}/team_standings/` | Team championship standings |
+| `/weekend/{weekend_id}/starting_grid/` | Grids associated with qualifying sessions |
+| `/grand-prix/{session_id}/positions/` | Chronological position updates with driver profiles |
 
-Returns all Formula 1 seasons for which OpenF1 provides session data.
+Weekend IDs are OpenF1 meeting keys, session IDs are OpenF1 session keys and
+driver IDs are racing numbers. Country IDs are OpenF1 country keys, not ISO
+numeric codes. Country data contains `id`, `name`, `alpha3_code` and
+`flag_base64`; no REST Countries enrichment is performed.
 
-#### Example request
+## Sphinx documentation
+
+The documentation includes application and route functions, service methods,
+private service helpers, response models, caching rules and conversion details.
+API references are generated directly from the English reStructuredText
+Docstrings (`:param:`, `:return:`, `:raises:`).
+
+From this directory, in an activated Python environment:
 
 ```bash
-curl http://localhost:8000/seasons/
+python -m pip install -r requirements-docs.txt
+python -m sphinx -b html -W --keep-going docs docs/_build/html
 ```
 
-#### Example response
+Open [docs/_build/html/index.html](docs/_build/html/index.html) after building.
+The source starts at [docs/index.rst](docs/index.rst). Generated files are ignored
+by Git. Building imports the backend but does not start the application or
+require a running Redis server or upstream connection.
 
-```json
-[
-  2023,
-  2024,
-  2025,
-  2026
-]
-```
+## Request pacing
 
-#### Response fields
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `[]` | `number[]` | A sorted list of available season years. |
-
----
-
-### Get race weekends for a season
-
-```http
-GET /seasons/{season}/weekends/
-```
-
-Returns all race weekends for a specific Formula 1 season.
-
-#### Path parameters
-
-| Parameter | Type | Required | Description |
-| --- | --- | --- | --- |
-| `season` | `integer` | yes | The season year, for example `2024`. |
-
-#### Response fields
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `name` | `string` | Name of the race weekend. |
-| `id` | `integer` | OpenF1 meeting key. This value is used as `weekend_id` for the sessions endpoint. |
-| `country` | `object \| null` | Country metadata for the race weekend. Can be `null` if country enrichment fails. |
-| `country.id` | `integer` | Numeric country code. |
-| `country.name` | `string` | English country name. |
-| `country.name_de` | `string` | German country name. |
-| `country.alpha3_code` | `string` | ISO 3166-1 alpha-3 country code. |
-| `country.subregion` | `string` | Country subregion. |
-| `country.region` | `string` | Country region. |
-| `country.flag_base64` | `string` | Base64-encoded SVG flag. |
-| `circuit_id` | `integer` | OpenF1 circuit key. |
-| `date_start` | `string` | Start date and time of the weekend in ISO 8601 format. |
-| `date_end` | `string` | End date and time of the weekend in ISO 8601 format. |
-| `gmt_offset` | `string` | Local GMT offset of the event. |
-| `cancelled` | `boolean` | Indicates whether the race weekend was cancelled. |
-
----
-
-### Get sessions for a race weekend
-
-```http
-GET /weekend/{weekend_id}/sessions/
-```
-
-Returns all sessions for a specific race weekend.
-
-A `weekend_id` can be obtained from the `/seasons/{season}/weekends/` endpoint. It corresponds to the OpenF1 `meeting_key`.
-
-#### Path parameters
-
-| Parameter | Type | Required | Description |
-| --- | --- | --- | --- |
-| `weekend_id` | `integer` | yes | The race weekend / meeting ID. |
-
-#### Response fields
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `id` | `integer` | OpenF1 session key. |
-| `type` | `string` | Normalized session type. |
-| `weekend_id` | `integer` | Related race weekend / meeting ID. |
-| `start_time` | `string` | Session start time in ISO 8601 format. |
-
-#### Possible session types
-
-```text
-practice_one
-practice_two
-practice_three
-sprint
-sprint_qualifying
-qualifying
-grand_prix
-```
-
-## Typical API Flow
-
-A client usually uses the API in this order:
-
-```text
-GET /seasons/
-        ↓
-GET /seasons/{season}/weekends/
-        ↓
-GET /weekend/{weekend_id}/sessions/
-```
-
-## Upstream APIs
-
-This backend uses:
-
-- [OpenF1 API](https://openf1.org/)
-- [REST Countries](https://restcountries.com/)
-- [FlagCDN](https://flagcdn.com/)
-
-OpenF1 requests are rate-limited internally to 3 requests per second and 30 requests per minute. REST Countries / flag requests are rate-limited to 2 requests per second.
+OpenF1 API attempts are spaced at least 2.1 seconds apart within each client.
+HTTP 429 responses allow up to two retries, honoring Retry-After when usable.
+Up to eight image downloads run concurrently; external image URLs bypass the
+OpenF1 API limiters. See [usage and behavior](docs/usage.rst) for caching,
+selection rules and error handling.

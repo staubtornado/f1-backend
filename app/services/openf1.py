@@ -1,3 +1,5 @@
+"""Retrieve OpenF1 data and images with request pacing and optional Redis caching."""
+
 from asyncio import Lock, Semaphore, gather, sleep
 from base64 import b64encode
 from collections.abc import Awaitable, Callable
@@ -15,6 +17,8 @@ from redis.asyncio import Redis
 
 
 class RedisCache:
+    """Cache serialized values with per-key locks local to this instance."""
+
     def __init__(self, redis: Redis) -> None:
         """
         Initialize the cache with per-key locks for concurrent misses in this worker.
@@ -38,7 +42,8 @@ class RedisCache:
 
         :param key: Redis cache key.
         :param load: Async callback returning the value and its lifetime in seconds.
-        :return: Cached value as bytes or a string, depending on the Redis configuration.
+        :return: Bytes from a fresh load, or bytes/string from Redis depending on
+            its decoding configuration.
         """
         cached = await self._redis.get(key)
         if cached is not None:
@@ -56,6 +61,8 @@ class RedisCache:
 
 
 class OpenF1:
+    """Fetch raw upstream records and enrich flags and driver portraits."""
+
     API_URL = "https://api.openf1.org/v1"
 
     def __init__(self, client: AsyncClient) -> None:
@@ -303,7 +310,16 @@ class OpenF1:
         return data
 
     async def get_grand_prix_session_positions(self, session_id: int) -> list[dict]:
-        """Fetch all position changes for the given OpenF1 session key."""
+        """
+        Fetch position changes for a session without sorting them.
+
+        The session type is not checked; any OpenF1 session key can be supplied.
+
+        :param session_id: The OpenF1 session key.
+        :return: Position records in upstream order.
+        :raises ValueError: If the API response is not a list.
+        :raises httpx.HTTPStatusError: If the upstream request fails after any retries.
+        """
         data = await self._call_json(f"{self.API_URL}/position?session_key={session_id}")
         if not isinstance(data, list):
             raise ValueError("Unexpected data format from OpenF1 API")
@@ -327,7 +343,14 @@ class OpenF1:
         return data
 
     async def _with_driver_portrait(self, driver: dict) -> dict:
-        """Copy a driver profile and add its cached portrait, or an empty string."""
+        """
+        Copy a driver profile and add its base64-encoded portrait.
+
+        :param driver: Upstream driver record with an optional ``headshot_url``.
+        :return: A new dictionary with ``portrait_base64``; missing URLs yield
+            an empty string. The input dictionary is not modified.
+        :raises httpx.HTTPStatusError: If the portrait download fails.
+        """
         portrait = await self._get_image_base64(driver.get("headshot_url"))
         return {**driver, "portrait_base64": portrait}
 
@@ -367,6 +390,7 @@ class OpenF1:
             return (await self._call(url)).json()
 
         async def load() -> tuple[bytes, int]:
+            """Fetch a list response and serialize it with its cache lifetime."""
             data = (await self._call(url)).json()
             if not isinstance(data, list):
                 raise ValueError("Unexpected data format from OpenF1 API")
@@ -393,6 +417,7 @@ class OpenF1:
         image_url: str = url
 
         async def load() -> tuple[bytes, int]:
+            """Download and encode the image with a one-week cache lifetime."""
             image_data = await self._call_content(image_url)
             return b64encode(image_data), 60 * 60 * 24 * 7
 

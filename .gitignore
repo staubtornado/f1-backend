@@ -15,3 +15,6 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+
+# Generated Sphinx documentation
+docs/_build/

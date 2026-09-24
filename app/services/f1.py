@@ -1,3 +1,5 @@
+"""Convert OpenF1 data into response models and cache serialized results."""
+
 from asyncio import gather
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
@@ -41,6 +43,8 @@ EMPTY_TTL = 30
 
 
 class F1Service:
+    """Provide cached Formula 1 data using a shared OpenF1 client and Redis cache."""
+
     def __init__(self, openf1: OpenF1, redis: Redis) -> None:
         """
         Initialize the service and share its Redis cache with the OpenF1 client.
@@ -77,6 +81,7 @@ class F1Service:
         cache_key = f"weekends:{season}"
 
         async def fetch() -> list[Weekend]:
+            """Build weekends from meeting data containing encoded country flags."""
             raw_weekends: list[dict] = await self._openf1.get_season_weekends(season)
             weekends: list[Weekend] = []
             for raw in raw_weekends:
@@ -104,10 +109,18 @@ class F1Service:
         cache_key = f"weekend:{weekend_id}:sessions"
 
         async def fetch() -> list[Session]:
+            """Convert the weekend's upstream sessions into response models."""
             data: list[dict] = await self._openf1.get_weekend_sessions(weekend_id)
             return [Session.from_openf1(entry) for entry in data]
 
         def ttl(sessions: list[Session]) -> int:
+            """
+            Choose the schedule lifetime from the sessions' start times.
+
+            :param sessions: Sessions retrieved for the weekend.
+            :return: 30 seconds if empty, one week if all started over two days
+                ago, otherwise five minutes.
+            """
             if not sessions:
                 return EMPTY_TTL
 
@@ -125,12 +138,16 @@ class F1Service:
         """
         Retrieve session classifications and cache populated results for one day.
 
+        Upstream order is preserved. Gaps to the preceding entry are calculated
+        from its duration; entries are not sorted by finishing position here.
+
         :param session_id: The OpenF1 session key.
         :return: Session results. Empty classifications are cached for 30 seconds.
         """
         cache_key = f"session:{session_id}"
 
         async def fetch() -> Result:
+            """Convert classifications in upstream order and wrap the result."""
             raw_classifications: list[dict] = await self._openf1.get_classifications(session_id)
             classifications: list[Classification] = []
             for raw in raw_classifications:
@@ -162,6 +179,7 @@ class F1Service:
         cache_key = f"season:{season}:drivers:{driver_id}"
 
         async def fetch() -> Driver:
+            """Find a season driver, raising HTTP 404 when no matching data exists."""
             first_weekend_id = await self._openf1.get_first_weekend_id(season)
             if first_weekend_id is None:
                 raise HTTPException(status_code=404, detail=f"No weekends found for season {season}.")
@@ -196,6 +214,7 @@ class F1Service:
         cache_key = f"driver-standings:{season}"
 
         async def fetch() -> DriverStandings:
+            """Load standings for the latest eligible session, or an empty result."""
             latest_session_id = await self._openf1.get_latest_points_session_id(season)
             if latest_session_id is None:
                 return DriverStandings(season=season, standings=[])
@@ -215,9 +234,11 @@ class F1Service:
 
     async def get_season_team_standings(self, season: int) -> TeamStandings:
         """
-        Retrieve team standings from the latest started Grand Prix in a valid weekend.
+        Retrieve team standings from a started Grand Prix in the latest eligible weekend.
 
-        Seasons without a started Grand Prix in a valid weekend return empty standings.
+        Weekends are checked by descending start date, skipping cancelled and
+        future weekends. The latest started Grand Prix in the first matching
+        weekend is selected. If none exists, empty standings are returned.
 
         :param season: The season year.
         :return: Standings cached by season age, or empty standings cached for 30 seconds.
@@ -225,6 +246,7 @@ class F1Service:
         cache_key = f"season:{season}:team_standings"
 
         async def fetch() -> TeamStandings:
+            """Select a weekend with a started Grand Prix and convert its standings."""
             weekends: list[Weekend] = await self.get_season_weekends(season)
             now = datetime.now(timezone.utc)
             entry: Session | None = None
@@ -275,6 +297,7 @@ class F1Service:
         cache_key = f"weekend:{weekend_id}:starting_grid"
 
         async def fetch() -> list[StartingGrid]:
+            """Match grid rows to qualifying sessions and sort their positions."""
             sessions, data = await gather(
                 self.get_weekend_sessions(weekend_id),
                 self._openf1.get_session_starting_grid(weekend_id),
@@ -323,6 +346,7 @@ class F1Service:
         :raises HTTPException: HTTP 502 if a position references a missing driver.
         """
         async def fetch() -> list[RacePosition]:
+            """Attach session drivers to position updates and sort by timestamp."""
             data = await self._openf1.get_grand_prix_session_positions(session_id)
             if not data:
                 return []
@@ -360,7 +384,8 @@ class F1Service:
         Read a cached value or load and serialize it as a single JSON document.
 
         The v2 key prefix separates these values from the former nested JSON format.
-        Concurrent misses for the same key share a loader within this worker.
+        Concurrent misses for the same key share a lock in this cache instance.
+        After a successful load, waiting callers reuse the cached value.
 
         :param key: Cache key without the version prefix.
         :param adapter: Serializer and validator for the response type.
@@ -369,6 +394,7 @@ class F1Service:
         :return: Validated value from Redis or the loader.
         """
         async def load() -> tuple[bytes, int]:
+            """Serialize the fetched response and pair it with its cache lifetime."""
             result = await fetch()
             content = adapter.dump_json(result)
             ex = ttl if isinstance(ttl, int) else ttl(result)

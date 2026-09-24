@@ -2,6 +2,8 @@ from enum import Enum
 
 
 class SessionType(str, Enum):
+    """Normalized session types, including three pre-season testing days."""
+
     QUALIFYING = "qualifying"
     PRACTICE_ONE = "practice_one"
     PRACTICE_TWO = "practice_two"

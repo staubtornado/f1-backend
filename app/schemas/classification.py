@@ -6,6 +6,8 @@ from app.schemas.driver_race_end_status import DriverRaceEndStatus
 
 
 class Classification(BaseModel):
+    """A session result entry with finish status, duration and time gaps."""
+
     position: int | None
     driver_id: int
     status: DriverRaceEndStatus
@@ -16,6 +18,20 @@ class Classification(BaseModel):
 
     @classmethod
     def from_openf1(cls, data: dict, front_classification: Self | None) -> Self:
+        """
+        Normalize an OpenF1 result entry and compute its gap to the previous entry.
+
+        :param data: Result record. ``duration`` and ``gap_to_leader`` are modified
+            in place: lists use their last truthy value, scalar floats are retained,
+            and other scalar values (including integers) become None.
+        :param front_classification: Previous entry in upstream order, or None for
+            the first entry. It need not be the driver immediately ahead on track.
+        :return: Classification with status precedence DNF, DSQ, DNS, then finished.
+            The gap to the previous entry is the duration difference if its time is
+            truthy and the current duration is numeric; otherwise it is None.
+        :raises KeyError: If a required field is missing.
+        :raises pydantic.ValidationError: If the normalized fields fail validation.
+        """
         status: DriverRaceEndStatus = DriverRaceEndStatus.FINISHED
 
         if data.get("dnf", False):
